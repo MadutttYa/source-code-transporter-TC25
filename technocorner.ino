@@ -1,5 +1,10 @@
 #include <ESP32Servo.h>
-#include <Bluepad32.h>
+#include <PS4Controller.h>
+#include <Arduino.h>
+#include "esp_bt_main.h"
+#include "esp_bt_device.h"
+#include "esp_gap_bt_api.h"
+#include "esp_err.h"
 
 /*------------------------- SERVO STUFF ------------------------------- */
 
@@ -30,30 +35,22 @@ void setupServo()
     servoLengan.write(20);
 }
 
-// Fungsi untuk mengecek apakah servo sudah mencapai posisi yang diinginkan
-bool servoReachedTarget()
-{
-    // Toleransi 2-3 derajat untuk menghindari "hunting"
-    return abs(posisiCapit - targetPosisiCapit) <= 2;
-}
-
-// Fungsi utama yang diperbaiki
-void handleServoCapit(ControllerPtr ctl)
+void handleServoCapit()
 {
     unsigned long now = millis();
 
-    bool buttonPressed = ctl->r1() || ctl->l1();
+    bool buttonPressed = PS4.R1() || PS4.L1();
 
     if (buttonPressed)
     {
         uint8_t newTarget = targetPosisiCapit;
-        if (ctl->r1())
+        if (PS4.R1())
         {
-            newTarget = constrain(targetPosisiCapit + 20, 0, 120);
+            newTarget = constrain(targetPosisiCapit + 15, 0, 55);
         }
-        else if (ctl->l1())
+        else if (PS4.L1())
         {
-            newTarget = constrain(targetPosisiCapit - 20, 0, 120);
+            newTarget = constrain(targetPosisiCapit - 15, 0, 55);
         }
 
         if (newTarget != targetPosisiCapit)
@@ -65,11 +62,11 @@ void handleServoCapit(ControllerPtr ctl)
         {
             if (posisiCapit < targetPosisiCapit)
             {
-                posisiCapit = constrain(posisiCapit + 20, 0, 120);
+                posisiCapit = constrain(posisiCapit + 15, 0, 55);
             }
             else if (posisiCapit > targetPosisiCapit)
             {
-                posisiCapit = constrain(posisiCapit - 20, 0, 120);
+                posisiCapit = constrain(posisiCapit - 15, 0, 55);
             }
 
             Serial.println("Posisi Capit: " + String(posisiCapit) + ", Target: " + String(targetPosisiCapit));
@@ -80,7 +77,7 @@ void handleServoCapit(ControllerPtr ctl)
     }
 }
 
-void handleLengan(ControllerPtr ctl)
+void handleLengan()
 {
     unsigned long now = millis();
     if (now - lastServoLenganUpdate >= servoDelayLengan)
@@ -88,11 +85,11 @@ void handleLengan(ControllerPtr ctl)
         uint8_t oldPos = posisiLengan;
 
         // R2/L2 for arm control
-        if (ctl->buttons() & BUTTON_TRIGGER_R)
+        if (PS4.Triangle())
         {
             posisiLengan = constrain(posisiLengan + 25, 0, 90);
         }
-        else if (ctl->buttons() & BUTTON_TRIGGER_L)
+        else if (PS4.Cross())
         {
             posisiLengan = constrain(posisiLengan - 25, 20, 90);
         }
@@ -121,7 +118,7 @@ const uint8_t resolution = 8;
 const uint8_t ledChannel1 = 3;
 const uint8_t ledChannel2 = 4;
 
-const uint16_t SPEED_TRANSPORT = 200;
+const uint16_t SPEED_TRANSPORT = 240;
 const uint16_t SPEED_TURN_SHARP = 240; // Aggressive turning
 const uint16_t SPEED_PIVOT = 200;      // Balanced pivot speed
 
@@ -130,10 +127,8 @@ void setupPinMotor()
     pinMode(PIN_ENA, OUTPUT);
     pinMode(PIN_ENB, OUTPUT);
 
-    ledcSetup(ledChannel1, frequency, resolution);
-    ledcSetup(ledChannel2, frequency, resolution);
-    ledcAttachPin(PIN_ENA, ledChannel1);
-    ledcAttachPin(PIN_ENB, ledChannel2);
+    ledcAttach(PIN_ENA, frequency, resolution);
+    ledcAttach(PIN_ENB, frequency, resolution);
 
     pinMode(PIN_IN1, OUTPUT);
     pinMode(PIN_IN2, OUTPUT);
@@ -177,8 +172,8 @@ void setMotorSpeed(int leftSpeed, int rightSpeed)
         digitalWrite(PIN_IN4, LOW);
     }
 
-    ledcWrite(ledChannel1, abs(leftSpeed));
-    ledcWrite(ledChannel2, abs(rightSpeed));
+    analogWrite(PIN_ENA, abs(leftSpeed));
+    analogWrite(PIN_ENB, abs(rightSpeed));
 }
 
 void stopMotors()
@@ -186,27 +181,25 @@ void stopMotors()
     setMotorSpeed(0, 0);
 }
 
-void handleControlMotor(ControllerPtr ctl)
+void handleControlMotor()
 {
     int leftSpeed = 0;
     int rightSpeed = 0;
     bool isMoving = false;
-
-    uint8_t dpadState = ctl->dpad();
 
     uint16_t normalSpeed = SPEED_TRANSPORT;
     uint16_t turnSpeed = SPEED_TURN_SHARP;
     uint16_t pivotSpeed = SPEED_PIVOT;
 
     // berputar di tempat
-    if (ctl->buttons() & BUTTON_X)
+    if (PS4.Square())
     {
         Serial.println("Berputar di tempat ke kiri");
         leftSpeed = -pivotSpeed;
         rightSpeed = pivotSpeed;
         isMoving = true;
     }
-    else if (ctl->buttons() & BUTTON_B)
+    else if (PS4.Circle())
     {
         Serial.println("Berputar di tempat ke kanan");
         leftSpeed = pivotSpeed;
@@ -215,28 +208,28 @@ void handleControlMotor(ControllerPtr ctl)
     }
 
     // SINGLE DIRECTION MOVEMENTS
-    else if (dpadState & DPAD_UP)
+    else if (PS4.Up())
     {
         Serial.println("Bergerak maju");
         leftSpeed = normalSpeed;
         rightSpeed = normalSpeed;
         isMoving = true;
     }
-    else if (dpadState & DPAD_DOWN)
+    else if (PS4.Down())
     {
         Serial.println("Bergerak mundur");
         leftSpeed = -normalSpeed;
         rightSpeed = -normalSpeed;
         isMoving = true;
     }
-    else if (dpadState & DPAD_LEFT)
+    else if (PS4.Left())
     {
         Serial.println("Bergerak kiri");
         leftSpeed = turnSpeed * 0.25; // More aggressive
         rightSpeed = turnSpeed;
         isMoving = true;
     }
-    else if (dpadState & DPAD_RIGHT)
+    else if (PS4.Right())
     {
         Serial.println("Bergerak kanan");
         leftSpeed = turnSpeed;
@@ -254,106 +247,49 @@ void handleControlMotor(ControllerPtr ctl)
     }
 }
 
-/*------------------------- CONTROLLER HANDLER (NGAMBIL DARI CONTOH) ------------------------------- */
-
-ControllerPtr myControllers[BP32_MAX_GAMEPADS];
-bool controllerConnected = false;
-
-void onConnectController(ControllerPtr ctl)
-{
-    bool foundEmptySlot = false;
-    for (int i = 0; i < BP32_MAX_GAMEPADS; i++)
-    {
-        if (myControllers[i] == nullptr)
-        {
-            Serial.printf("CALLBACK: controller is connected, index=%d\n", i);
-            myControllers[i] = ctl;
-            foundEmptySlot = true;
-            break;
-        }
-    }
-    if (!foundEmptySlot)
-    {
-        Serial.println('CALLBACK: Controller connected, but could not found empty slot.');
-    }
-
-    controllerConnected = true;
+void removePairedDevices() {
+  uint8_t pairedDeviceBtAddr[20][6];
+  int count = esp_bt_gap_get_bond_device_num();
+  esp_bt_gap_get_bond_device_list(&count, pairedDeviceBtAddr);
+  for (int i = 0; i < count; i++) {
+    esp_bt_gap_remove_bond_device(pairedDeviceBtAddr[i]);
+  }
 }
 
-void onDisconnectedController(ControllerPtr ctl)
-{
-    bool foundController = false;
-    for (int i = 0; i < BP32_MAX_GAMEPADS; i++)
-    {
-        if (myControllers[i] == ctl)
-        {
-            Serial.printf("CALLBACK: Controller disconnected from index=%d\n", i);
-            myControllers[i] = nullptr;
-            foundController = true;
-            break;
-        }
+void printDeviceAddress() {
+  const uint8_t* point = esp_bt_dev_get_address();
+  for (int i = 0; i < 6; i++) {
+    char str[3];
+    sprintf(str, "%02x", (int)point[i]);
+    Serial.print(str);
+    if (i < 5) {
+      Serial.print(":");
     }
-    if (!foundController)
-    {
-        Serial.println("CALLBACK: Controller disconnected, but not found in myControllers.");
-    }
-    stopMotors();
-    controllerConnected = false;
+  }
 }
 
-void processGamepad(ControllerPtr ctl)
-{
-    handleControlMotor(ctl);
-    handleServoCapit(ctl);
-    handleLengan(ctl);
+void setup() {
+  Serial.begin(115200);
+  
+  setupServo();
+  setupPinMotor();
+  
+  // Inisialisasi PS4 Controller
+  // Ganti dengan MAC address PS4 controller Anda
+  PS4.begin();
+  removePairedDevices();
+  Serial.print("This device MAC is: ");
+  printDeviceAddress();
+  Serial.println("");
+  
+  Serial.println("ESP32 siap, hubungkan PS4 controller...");
 }
 
-void processControllers()
-{
-    for (auto myController : myControllers)
-    {
-        if (myController && myController->isConnected() && myController->hasData())
-        {
-            if (myController->isGamepad())
-            {
-                processGamepad(myController);
-            }
-            else
-            {
-                Serial.println("Unsupported controller");
-            }
-        }
-    }
-}
-
-void setup()
-{
-    Serial.begin(115200);
-    Serial.printf("Firmware: %s\n", BP32.firmwareVersion());
-
-    BP32.setup(&onConnectController, &onDisconnectedController);
-    BP32.forgetBluetoothKeys();
-    BP32.enableVirtualDevice(false);
-
-    setupServo();
-    setupPinMotor();
-
-    Serial.println("Kode baru sudah masuk.25");
-    Serial.println("Setup completed. Waiting for PS4 controller to connect...");
-    Serial.println("To pair: Hold PS button + Share button on PS4 controller until it blinks rapidly");
-}
-
-void loop()
-{
-    bool updateData = BP32.update();
-    if (updateData)
-    {
-        processControllers();
-    }
-    else if (!controllerConnected)
-    {
-        stopMotors();
-    }
-
-    vTaskDelay(1);
+void loop() {
+  // Cek jika PS4 controller terhubung
+  if (PS4.isConnected()) {
+    handleServoCapit();
+    handleLengan();
+    handleControlMotor();
+  }
 }
